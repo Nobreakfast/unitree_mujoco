@@ -110,30 +110,42 @@ class SimpleKeyboardController:
         elif self.robot_state == "standing" and abs(self.velocity_x) < 0.01 and abs(self.velocity_y) < 0.01 and abs(self.angular_z) < 0.01:
             return stand_up_joint_pos
         else:
-            # Simple walking gait implementation
-            joint_pos = walk_joint_pos.copy()
+            # Use standing position as base for walking to reduce instability
+            joint_pos = stand_up_joint_pos.copy()
             
-            # Modify joint positions based on velocities
+            # Apply small, smooth modifications for movement
             if abs(self.velocity_x) > 0.01:  # Forward/backward motion
-                hip_offset = 0.2 * self.velocity_x * np.sin(gait_phase * 2 * np.pi)
+                # Much smaller offsets to prevent shaking
+                hip_offset = 0.05 * self.velocity_x * np.sin(gait_phase * 2 * np.pi)
+                knee_offset = 0.03 * self.velocity_x * np.cos(gait_phase * 2 * np.pi)
+                
+                # Apply to hip joints (indices 0, 3, 6, 9)
                 joint_pos[0] += hip_offset  # FL hip
                 joint_pos[3] -= hip_offset  # FR hip
                 joint_pos[6] -= hip_offset  # RL hip
                 joint_pos[9] += hip_offset  # RR hip
+                
+                # Apply to knee joints (indices 1, 4, 7, 10)
+                joint_pos[1] += knee_offset  # FL thigh
+                joint_pos[4] += knee_offset  # FR thigh
+                joint_pos[7] += knee_offset  # RL thigh
+                joint_pos[10] += knee_offset  # RR thigh
             
             if abs(self.angular_z) > 0.01:  # Turning
-                turn_offset = 0.1 * self.angular_z
+                # Very small turn offset to prevent instability
+                turn_offset = 0.02 * self.angular_z
                 joint_pos[0] += turn_offset  # FL hip
                 joint_pos[3] += turn_offset  # FR hip
                 joint_pos[6] += turn_offset  # RL hip
                 joint_pos[9] += turn_offset  # RR hip
             
             if abs(self.velocity_y) > 0.01:  # Strafing
-                strafe_offset = 0.1 * self.velocity_y
-                joint_pos[0] += strafe_offset
-                joint_pos[3] -= strafe_offset
-                joint_pos[6] += strafe_offset
-                joint_pos[9] -= strafe_offset
+                # Small strafe offset
+                strafe_offset = 0.03 * self.velocity_y
+                joint_pos[0] += strafe_offset  # FL hip
+                joint_pos[3] -= strafe_offset  # FR hip
+                joint_pos[6] += strafe_offset  # RL hip
+                joint_pos[9] -= strafe_offset  # RR hip
             
             return joint_pos
     
@@ -176,24 +188,35 @@ class SimpleKeyboardController:
                 # Process any pending commands
                 self.process_commands()
                 
-                # Calculate gait phase for walking
-                gait_phase = (self.running_time * 2.0) % 1.0  # 2 Hz gait frequency
+                # Apply velocity decay for smoother control
+                decay_factor = 0.95
+                if abs(self.velocity_x) < 0.05:
+                    self.velocity_x *= decay_factor
+                if abs(self.velocity_y) < 0.05:
+                    self.velocity_y *= decay_factor
+                if abs(self.angular_z) < 0.05:
+                    self.angular_z *= decay_factor
+                
+                # Calculate gait phase for walking (slower for stability)
+                gait_phase = (self.running_time * 1.0) % 1.0  # 1 Hz gait frequency for stability
                 
                 # Get target joint positions
                 target_positions = self.calculate_joint_positions(gait_phase)
                 
-                # Set motor commands
+                # Set motor commands with stable gains
                 for i in range(12):
                     cmd.motor_cmd[i].q = target_positions[i]
+                    
+                    # Use stable control gains that match stand_go2.py
                     if self.robot_state == "sitting":
-                        cmd.motor_cmd[i].kp = 20.0
+                        cmd.motor_cmd[i].kp = 20.0  # Lower stiffness for sitting
                     elif abs(self.velocity_x) > 0.01 or abs(self.velocity_y) > 0.01 or abs(self.angular_z) > 0.01:
-                        cmd.motor_cmd[i].kp = 40.0  # Lower stiffness for walking
+                        cmd.motor_cmd[i].kp = 30.0  # Moderate stiffness for walking
                     else:
-                        cmd.motor_cmd[i].kp = 60.0  # Higher stiffness for standing
+                        cmd.motor_cmd[i].kp = 50.0  # Higher stiffness for standing
                     
                     cmd.motor_cmd[i].dq = 0.0
-                    cmd.motor_cmd[i].kd = 3.5
+                    cmd.motor_cmd[i].kd = 3.5  # Keep same damping as working version
                     cmd.motor_cmd[i].tau = 0.0
                 
                 # Send command

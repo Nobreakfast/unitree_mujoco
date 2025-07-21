@@ -3,27 +3,44 @@
 ## Issues Identified and Fixed
 
 ### 1. SDK Configuration Mismatch
-**Problem**: The keyboard controllers were using different domain IDs and interfaces than the simulation.
-- Original controllers used `ChannelFactoryInitialize(0, sys.argv[1])` or `ChannelFactoryInitialize(1, "lo")`
-- Simulation uses `ChannelFactoryInitialize(1, "lo")` (from config.py)
+**Problem**: The keyboard controllers were using different domain IDs and network interfaces than the simulation.
+- `unitree_mujoco.py` uses: `ChannelFactoryInitialize(1, "lo")`
+- Original keyboard controllers used: `ChannelFactoryInitialize(0, "eth0")` or command-line arguments
 
-**Fix**: Updated both controllers to use `ChannelFactoryInitialize(1, "lo")` to match the simulation.
+**Solution**: Updated all keyboard controllers to use `ChannelFactoryInitialize(1, "lo")` to match the simulation configuration.
 
 ### 2. Terminal Input Issues on macOS
-**Problem**: The original `keyboard_controller_go2.py` used raw terminal mode which can be problematic on macOS.
+**Problem**: The terminal-based keyboard controller (`keyboard_controller_go2.py`) had issues with raw terminal mode on macOS, causing unresponsive or erratic behavior.
 
-**Fix**: 
-- Added better error handling for terminal operations
-- Improved keyboard input feedback
-- Added Ctrl+C handling
+**Solution**: 
+- Added fallback import for `getch` function
+- Improved terminal setup/restore with error handling
+- Added Ctrl+C as quit option
+- Enhanced user feedback with print statements
 
-### 3. Pygame Controller Issues
-**Problem**: The pygame controller had timing and display update issues.
+### 3. Robot Shaking and Control Issues
+**Problem**: The robot was shaking excessively and barely responding to keyboard input due to:
+- Overly aggressive walking gait with large joint offsets
+- Mismatched control gains compared to the working `stand_go2.py`
+- Using unstable walking positions as base instead of stable standing positions
+- Too fast gait frequency causing instability
 
-**Fix**:
-- Fixed display update frequency (30 FPS instead of erratic updates)
-- Added proper pygame clock management (60 FPS)
-- Ensured SDK configuration matches simulation
+**Solution**:
+- **Reduced joint offsets**: Changed from 0.2-0.3 to 0.02-0.05 for much smaller, smoother movements
+- **Fixed control gains**: Used stable gains matching `stand_go2.py` (kp: 20.0 for sitting, 30.0 for walking, 50.0 for standing)
+- **Changed base position**: Use stable standing position as base for walking instead of separate walking positions
+- **Slower gait frequency**: Reduced from 2.0 Hz to 1.0 Hz for better stability
+- **Added velocity decay**: Gradual deceleration when keys are not pressed to prevent sudden stops
+- **Improved state transitions**: Smoother transitions between standing, sitting, and walking states
+
+### 4. Pygame Controller Issues
+**Problem**: The Pygame controller had timing and display update issues causing the GUI to quit unexpectedly.
+
+**Solution**:
+- Fixed display update frequency to 30 FPS
+- Added proper frame rate limiting with `clock.tick(60)`
+- Improved event handling loop
+- Applied same stability fixes as other controllers
 
 ## Available Controllers
 
