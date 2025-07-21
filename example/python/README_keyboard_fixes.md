@@ -23,17 +23,19 @@
 - **CRITICAL**: Incorrect joint ordering - controllers assumed FL, FR, RL, RR order but simulation uses FR, FL, RR, RL
 - Overly aggressive walking gait with large joint offsets
 - Mismatched control gains compared to the working `stand_go2.py`
+- **Abrupt gain changes** causing oscillations when switching states
 - Using unstable walking positions as base instead of stable standing positions
 - Too fast gait frequency causing instability
 
 **Solution**:
 - **Fixed joint ordering**: Corrected to match simulation's actuator order: FR(0-2), FL(3-5), RR(6-8), RL(9-11)
 - **Reduced joint offsets**: Changed from 0.2-0.3 to 0.02-0.05 for much smaller, smoother movements
-- **Fixed control gains**: Used stable gains matching `stand_go2.py` (kp: 20.0 for sitting, 30.0 for walking, 50.0 for standing)
+- **Implemented smooth gain transitions**: Added gradual kp changes using tanh-like transitions over 1.2 seconds, matching `stand_go2.py` behavior
+- **Lowered maximum gains**: Reduced standing kp from 50.0 to 35.0, walking kp to 25.0 to prevent oscillations
 - **Changed base position**: Use stable standing position as base for walking instead of separate walking positions
 - **Slower gait frequency**: Reduced from 2.0 Hz to 1.0 Hz for better stability
 - **Added velocity decay**: Gradual deceleration when keys are not pressed to prevent sudden stops
-- **Improved state transitions**: Smoother transitions between standing, sitting, and walking states
+- **Improved state transitions**: Smoother transitions between standing, sitting, and walking states with transition timing
 
 ### 4. Pygame Controller Issues
 **Problem**: The Pygame controller had timing and display update issues causing the GUI to quit unexpectedly.

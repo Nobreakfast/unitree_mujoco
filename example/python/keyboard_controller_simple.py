@@ -42,6 +42,10 @@ class SimpleKeyboardController:
         self.running = True
         self.command_queue = Queue()
         
+        # Track state transition timing for smooth gains
+        self.state_transition_time = 0.0
+        self.previous_state = "standing"
+        
     def input_thread(self):
         """Simple input thread using standard input"""
         print("\n=== Simple Keyboard Controller ===")
@@ -90,10 +94,16 @@ class SimpleKeyboardController:
                 self.velocity_y = -0.2
                 print(f"Strafe Right: {self.velocity_y:.1f}")
             elif cmd == 'u':
-                self.robot_state = "standing"
+                if self.robot_state != "standing":
+                    self.previous_state = self.robot_state
+                    self.robot_state = "standing"
+                    self.state_transition_time = 0.0  # Reset transition timer
                 print("Standing")
             elif cmd == 'i':
-                self.robot_state = "sitting"
+                if self.robot_state != "sitting":
+                    self.previous_state = self.robot_state
+                    self.robot_state = "sitting"
+                    self.state_transition_time = 0.0  # Reset transition timer
                 print("Sitting")
             elif cmd == ' ' or cmd == 'space':
                 self.velocity_x = 0.0
@@ -204,17 +214,27 @@ class SimpleKeyboardController:
                 # Get target joint positions
                 target_positions = self.calculate_joint_positions(gait_phase)
                 
-                # Set motor commands with stable gains
+                # Track state transitions for smooth gain changes
+                if self.robot_state != self.previous_state:
+                    self.state_transition_time += self.dt
+                else:
+                    self.state_transition_time = min(self.state_transition_time + self.dt, 2.0)  # Cap at 2 seconds
+                
+                # Set motor commands with smooth gain transitions
                 for i in range(12):
                     cmd.motor_cmd[i].q = target_positions[i]
                     
-                    # Use stable control gains that match stand_go2.py
+                    # Use smooth gain transitions to prevent oscillations
                     if self.robot_state == "sitting":
-                        cmd.motor_cmd[i].kp = 20.0  # Lower stiffness for sitting
+                        # Gradual transition to sitting gains
+                        transition_phase = min(self.state_transition_time / 1.2, 1.0)
+                        cmd.motor_cmd[i].kp = 50.0 * (1 - transition_phase) + 20.0 * transition_phase
                     elif abs(self.velocity_x) > 0.01 or abs(self.velocity_y) > 0.01 or abs(self.angular_z) > 0.01:
-                        cmd.motor_cmd[i].kp = 30.0  # Moderate stiffness for walking
+                        cmd.motor_cmd[i].kp = 25.0  # Lower stiffness for walking to prevent shaking
                     else:
-                        cmd.motor_cmd[i].kp = 50.0  # Higher stiffness for standing
+                        # Gradual transition to standing gains
+                        transition_phase = min(self.state_transition_time / 1.2, 1.0)
+                        cmd.motor_cmd[i].kp = 20.0 * (1 - transition_phase) + 35.0 * transition_phase  # Lower max gain
                     
                     cmd.motor_cmd[i].dq = 0.0
                     cmd.motor_cmd[i].kd = 3.5  # Keep same damping as working version
