@@ -1,0 +1,289 @@
+import time
+import sys
+import numpy as np
+try:
+    import pygame
+except ImportError:
+    print("pygame not found. Install with: pip install pygame")
+    sys.exit(1)
+
+from unitree_sdk2py.core.channel import ChannelPublisher, ChannelSubscriber
+from unitree_sdk2py.core.channel import ChannelFactoryInitialize
+from unitree_sdk2py.idl.default import unitree_go_msg_dds__LowCmd_
+from unitree_sdk2py.idl.unitree_go.msg.dds_ import LowCmd_
+from unitree_sdk2py.utils.crc import CRC
+
+# Joint positions for different poses
+stand_up_joint_pos = np.array([
+    0.00571868, 0.608813, -1.21763, -0.00571868, 0.608813, -1.21763,
+    0.00571868, 0.608813, -1.21763, -0.00571868, 0.608813, -1.21763
+], dtype=float)
+
+stand_down_joint_pos = np.array([
+    0.0473455, 1.22187, -2.44375, -0.0473455, 1.22187, -2.44375, 0.0473455,
+    1.22187, -2.44375, -0.0473455, 1.22187, -2.44375
+], dtype=float)
+
+# Walking gait parameters
+walk_joint_pos = np.array([
+    0.0, 0.8, -1.6, 0.0, 0.8, -1.6,
+    0.0, 0.8, -1.6, 0.0, 0.8, -1.6
+], dtype=float)
+
+class KeyboardControllerPygame:
+    def __init__(self):
+        self.dt = 0.002
+        self.running_time = 0.0
+        self.crc = CRC()
+        
+        # Control states
+        self.robot_state = "standing"  # standing, walking, sitting
+        self.velocity_x = 0.0  # forward/backward
+        self.velocity_y = 0.0  # left/right
+        self.angular_z = 0.0   # turning
+        
+        # Control parameters
+        self.max_velocity = 0.5
+        self.max_angular = 0.8
+        self.velocity_step = 0.1
+        self.angular_step = 0.2
+        
+        self.running = True
+        
+        # Initialize pygame
+        pygame.init()
+        self.screen = pygame.display.set_mode((400, 300))
+        pygame.display.set_caption("Unitree Go2 Keyboard Controller")
+        self.clock = pygame.time.Clock()
+        
+    def handle_keyboard_input(self):
+        """Handle pygame keyboard events"""
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                self.running = False
+            elif event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_q or event.key == pygame.K_ESCAPE:
+                    self.running = False
+                elif event.key == pygame.K_u:
+                    self.robot_state = "standing"
+                    print("Robot state: Standing")
+                elif event.key == pygame.K_i:
+                    self.robot_state = "sitting"
+                    print("Robot state: Sitting")
+                elif event.key == pygame.K_SPACE:
+                    self.velocity_x = 0.0
+                    self.velocity_y = 0.0
+                    self.angular_z = 0.0
+                    print("Movement stopped")
+        
+        # Handle continuous key presses
+        keys = pygame.key.get_pressed()
+        
+        # Forward/Backward
+        if keys[pygame.K_w]:
+            self.velocity_x = min(self.max_velocity, self.velocity_x + self.velocity_step)
+        elif keys[pygame.K_s]:
+            self.velocity_x = max(-self.max_velocity, self.velocity_x - self.velocity_step)
+        else:
+            self.velocity_x *= 0.9  # Gradual deceleration
+            if abs(self.velocity_x) < 0.01:
+                self.velocity_x = 0.0
+        
+        # Left/Right strafe
+        if keys[pygame.K_j]:
+            self.velocity_y = min(self.max_velocity, self.velocity_y + self.velocity_step)
+        elif keys[pygame.K_l]:
+            self.velocity_y = max(-self.max_velocity, self.velocity_y - self.velocity_step)
+        else:
+            self.velocity_y *= 0.9  # Gradual deceleration
+            if abs(self.velocity_y) < 0.01:
+                self.velocity_y = 0.0
+        
+        # Turning
+        if keys[pygame.K_a]:
+            self.angular_z = min(self.max_angular, self.angular_z + self.angular_step)
+        elif keys[pygame.K_d]:
+            self.angular_z = max(-self.max_angular, self.angular_z - self.angular_step)
+        else:
+            self.angular_z *= 0.9  # Gradual deceleration
+            if abs(self.angular_z) < 0.01:
+                self.angular_z = 0.0
+    
+    def calculate_joint_positions(self, gait_phase):
+        """Calculate joint positions based on gait and velocities"""
+        if self.robot_state == "sitting":
+            return stand_down_joint_pos
+        elif self.robot_state == "standing" and abs(self.velocity_x) < 0.01 and abs(self.velocity_y) < 0.01 and abs(self.angular_z) < 0.01:
+            return stand_up_joint_pos
+        else:
+            # Simple walking gait implementation
+            joint_pos = walk_joint_pos.copy()
+            
+            # Modify joint positions based on velocities
+            if abs(self.velocity_x) > 0.01:  # Forward/backward motion
+                hip_offset = 0.3 * self.velocity_x * np.sin(gait_phase * 2 * np.pi)
+                knee_offset = 0.2 * self.velocity_x * np.cos(gait_phase * 2 * np.pi)
+                
+                # Front legs
+                joint_pos[0] += hip_offset  # FL hip
+                joint_pos[1] += knee_offset  # FL thigh
+                joint_pos[3] -= hip_offset  # FR hip
+                joint_pos[4] += knee_offset  # FR thigh
+                
+                # Rear legs (opposite phase)
+                joint_pos[6] -= hip_offset  # RL hip
+                joint_pos[7] += knee_offset  # RL thigh
+                joint_pos[9] += hip_offset  # RR hip
+                joint_pos[10] += knee_offset  # RR thigh
+            
+            if abs(self.angular_z) > 0.01:  # Turning
+                turn_offset = 0.2 * self.angular_z
+                joint_pos[0] += turn_offset  # FL hip
+                joint_pos[3] += turn_offset  # FR hip
+                joint_pos[6] += turn_offset  # RL hip
+                joint_pos[9] += turn_offset  # RR hip
+            
+            if abs(self.velocity_y) > 0.01:  # Strafing
+                strafe_offset = 0.2 * self.velocity_y
+                # Adjust hip joints for lateral movement
+                joint_pos[0] += strafe_offset
+                joint_pos[3] -= strafe_offset
+                joint_pos[6] += strafe_offset
+                joint_pos[9] -= strafe_offset
+            
+            return joint_pos
+    
+    def update_display(self):
+        """Update the pygame display with current status"""
+        self.screen.fill((0, 0, 0))  # Black background
+        
+        font = pygame.font.Font(None, 24)
+        y_offset = 20
+        
+        # Title
+        title = font.render("Unitree Go2 Controller", True, (255, 255, 255))
+        self.screen.blit(title, (10, y_offset))
+        y_offset += 40
+        
+        # Controls
+        controls = [
+            "Controls:",
+            "W/S: Forward/Backward",
+            "A/D: Turn Left/Right",
+            "J/L: Strafe Left/Right",
+            "U: Stand up, I: Sit down",
+            "SPACE: Stop, Q/ESC: Quit",
+            "",
+            f"State: {self.robot_state}",
+            f"Velocity X: {self.velocity_x:.2f}",
+            f"Velocity Y: {self.velocity_y:.2f}",
+            f"Angular Z: {self.angular_z:.2f}"
+        ]
+        
+        for line in controls:
+            color = (255, 255, 0) if line.startswith(("State:", "Velocity", "Angular")) else (255, 255, 255)
+            text = font.render(line, True, color)
+            self.screen.blit(text, (10, y_offset))
+            y_offset += 25
+        
+        pygame.display.flip()
+    
+    def print_controls(self):
+        """Print control instructions to console"""
+        print("\n=== Unitree Go2 Pygame Keyboard Controller ===")
+        print("Movement Controls:")
+        print("  W/S: Forward/Backward")
+        print("  A/D: Turn Left/Right")
+        print("  J/L: Strafe Left/Right")
+        print("  SPACE: Stop movement")
+        print("\nPose Controls:")
+        print("  U: Stand up")
+        print("  I: Sit down")
+        print("\nOther:")
+        print("  Q/ESC: Quit")
+        print("\nA pygame window will open for control.")
+        print("Press Enter to start...")
+        print("==========================================\n")
+    
+    def run(self):
+        """Main control loop"""
+        self.print_controls()
+        input()  # Wait for user to press enter
+        
+        # Initialize SDK
+        if len(sys.argv) < 2:
+            ChannelFactoryInitialize(1, "lo")
+        else:
+            ChannelFactoryInitialize(0, sys.argv[1])
+        
+        # Create publisher
+        pub = ChannelPublisher("rt/lowcmd", LowCmd_)
+        pub.Init()
+        
+        # Initialize command
+        cmd = unitree_go_msg_dds__LowCmd_()
+        cmd.head[0] = 0xFE
+        cmd.head[1] = 0xEF
+        cmd.level_flag = 0xFF
+        cmd.gpio = 0
+        
+        for i in range(20):
+            cmd.motor_cmd[i].mode = 0x01  # (PMSM) mode
+            cmd.motor_cmd[i].q = 0.0
+            cmd.motor_cmd[i].kp = 0.0
+            cmd.motor_cmd[i].dq = 0.0
+            cmd.motor_cmd[i].kd = 0.0
+            cmd.motor_cmd[i].tau = 0.0
+        
+        print("Controller started! Use the pygame window for control.")
+        
+        try:
+            while self.running:
+                step_start = time.perf_counter()
+                self.running_time += self.dt
+                
+                # Handle input
+                self.handle_keyboard_input()
+                
+                # Calculate gait phase for walking
+                gait_phase = (self.running_time * 1.5) % 1.0  # 1.5 Hz gait frequency
+                
+                # Get target joint positions
+                target_positions = self.calculate_joint_positions(gait_phase)
+                
+                # Set motor commands
+                for i in range(12):
+                    cmd.motor_cmd[i].q = target_positions[i]
+                    if self.robot_state == "sitting":
+                        cmd.motor_cmd[i].kp = 20.0
+                    elif abs(self.velocity_x) > 0.01 or abs(self.velocity_y) > 0.01 or abs(self.angular_z) > 0.01:
+                        cmd.motor_cmd[i].kp = 40.0  # Lower stiffness for walking
+                    else:
+                        cmd.motor_cmd[i].kp = 60.0  # Higher stiffness for standing
+                    
+                    cmd.motor_cmd[i].dq = 0.0
+                    cmd.motor_cmd[i].kd = 3.5
+                    cmd.motor_cmd[i].tau = 0.0
+                
+                # Send command
+                cmd.crc = self.crc.Crc(cmd)
+                pub.Write(cmd)
+                
+                # Update display every few cycles
+                if int(self.running_time * 100) % 10 == 0:
+                    self.update_display()
+                
+                # Maintain loop timing
+                time_until_next_step = self.dt - (time.perf_counter() - step_start)
+                if time_until_next_step > 0:
+                    time.sleep(time_until_next_step)
+                    
+        except KeyboardInterrupt:
+            self.running = False
+        finally:
+            pygame.quit()
+            print("\nController stopped.")
+
+if __name__ == '__main__':
+    controller = KeyboardControllerPygame()
+    controller.run()
