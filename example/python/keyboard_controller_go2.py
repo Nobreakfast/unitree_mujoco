@@ -16,7 +16,8 @@ from unitree_sdk2py.idl.default import unitree_go_msg_dds__LowCmd_
 from unitree_sdk2py.idl.unitree_go.msg.dds_ import LowCmd_
 from unitree_sdk2py.utils.crc import CRC
 
-# Joint positions for different poses
+# Initial joint positions for different states
+# Order: FR_hip, FR_thigh, FR_calf, FL_hip, FL_thigh, FL_calf, RR_hip, RR_thigh, RR_calf, RL_hip, RL_thigh, RL_calf
 stand_up_joint_pos = np.array([
     0.00571868, 0.608813, -1.21763, -0.00571868, 0.608813, -1.21763,
     0.00571868, 0.608813, -1.21763, -0.00571868, 0.608813, -1.21763
@@ -27,7 +28,6 @@ stand_down_joint_pos = np.array([
     1.22187, -2.44375, -0.0473455, 1.22187, -2.44375
 ], dtype=float)
 
-# Walking gait parameters
 walk_joint_pos = np.array([
     0.0, 0.8, -1.6, 0.0, 0.8, -1.6,
     0.0, 0.8, -1.6, 0.0, 0.8, -1.6
@@ -136,38 +136,39 @@ class KeyboardController:
             joint_pos = stand_up_joint_pos.copy()
             
             # Apply small, smooth modifications for movement
+            # Correct joint order: FR(0-2), FL(3-5), RR(6-8), RL(9-11)
             if abs(self.velocity_x) > 0.01:  # Forward/backward motion
                 # Much smaller offsets to prevent shaking
                 hip_offset = 0.05 * self.velocity_x * np.sin(gait_phase * 2 * np.pi)
                 knee_offset = 0.03 * self.velocity_x * np.cos(gait_phase * 2 * np.pi)
                 
-                # Apply to hip joints (indices 0, 3, 6, 9)
-                joint_pos[0] += hip_offset  # FL hip
-                joint_pos[3] -= hip_offset  # FR hip
-                joint_pos[6] -= hip_offset  # RL hip
-                joint_pos[9] += hip_offset  # RR hip
+                # Apply to hip joints: FR(0), FL(3), RR(6), RL(9)
+                joint_pos[0] += hip_offset  # FR hip
+                joint_pos[3] -= hip_offset  # FL hip
+                joint_pos[6] -= hip_offset  # RR hip
+                joint_pos[9] += hip_offset  # RL hip
                 
-                # Apply to knee joints (indices 1, 4, 7, 10)
-                joint_pos[1] += knee_offset  # FL thigh
-                joint_pos[4] += knee_offset  # FR thigh
-                joint_pos[7] += knee_offset  # RL thigh
-                joint_pos[10] += knee_offset  # RR thigh
+                # Apply to thigh joints: FR(1), FL(4), RR(7), RL(10)
+                joint_pos[1] += knee_offset  # FR thigh
+                joint_pos[4] += knee_offset  # FL thigh
+                joint_pos[7] += knee_offset  # RR thigh
+                joint_pos[10] += knee_offset  # RL thigh
             
             if abs(self.angular_z) > 0.01:  # Turning
                 # Very small turn offset to prevent instability
                 turn_offset = 0.02 * self.angular_z
-                joint_pos[0] += turn_offset  # FL hip
-                joint_pos[3] += turn_offset  # FR hip
-                joint_pos[6] += turn_offset  # RL hip
-                joint_pos[9] += turn_offset  # RR hip
+                joint_pos[0] += turn_offset  # FR hip
+                joint_pos[3] += turn_offset  # FL hip
+                joint_pos[6] += turn_offset  # RR hip
+                joint_pos[9] += turn_offset  # RL hip
             
             if abs(self.velocity_y) > 0.01:  # Strafing
                 # Small strafe offset
                 strafe_offset = 0.03 * self.velocity_y
-                joint_pos[0] += strafe_offset  # FL hip
-                joint_pos[3] -= strafe_offset  # FR hip
-                joint_pos[6] += strafe_offset  # RL hip
-                joint_pos[9] -= strafe_offset  # RR hip
+                joint_pos[0] += strafe_offset  # FR hip
+                joint_pos[3] -= strafe_offset  # FL hip
+                joint_pos[6] += strafe_offset  # RR hip
+                joint_pos[9] -= strafe_offset  # RL hip
             
             return joint_pos
     
