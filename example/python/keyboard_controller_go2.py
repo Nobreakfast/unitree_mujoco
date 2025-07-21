@@ -2,9 +2,13 @@ import time
 import sys
 import numpy as np
 import threading
-import select
-import termios
-import tty
+try:
+    import getch
+except ImportError:
+    # Fallback for systems without getch
+    import select
+    import termios
+    import tty
 
 from unitree_sdk2py.core.channel import ChannelPublisher, ChannelSubscriber
 from unitree_sdk2py.core.channel import ChannelFactoryInitialize
@@ -49,49 +53,76 @@ class KeyboardController:
         self.old_settings = None
         
     def setup_terminal(self):
-        """Setup terminal for non-blocking keyboard input"""
-        self.old_settings = termios.tcgetattr(sys.stdin)
-        tty.setraw(sys.stdin.fileno())
+        """Setup terminal for keyboard input"""
+        try:
+            self.old_settings = termios.tcgetattr(sys.stdin)
+            tty.setraw(sys.stdin.fileno())
+        except:
+            self.old_settings = None
         
     def restore_terminal(self):
         """Restore terminal settings"""
         if self.old_settings:
-            termios.tcsetattr(sys.stdin, termios.TCSADRAIN, self.old_settings)
+            try:
+                termios.tcsetattr(sys.stdin, termios.TCSADRAIN, self.old_settings)
+            except:
+                pass
     
     def get_key(self):
         """Non-blocking keyboard input"""
-        if select.select([sys.stdin], [], [], 0) == ([sys.stdin], [], []):
-            return sys.stdin.read(1)
+        try:
+            if select.select([sys.stdin], [], [], 0) == ([sys.stdin], [], []):
+                return sys.stdin.read(1)
+        except:
+            pass
         return None
     
     def keyboard_thread(self):
         """Thread for handling keyboard input"""
+        print("\nKeyboard input active. Use the following keys:")
+        print("W/S: Forward/Backward, A/D: Turn, J/L: Strafe, U: Stand, I: Sit, SPACE: Stop, Q: Quit")
+        
         while self.running:
-            key = self.get_key()
-            if key:
-                if key.lower() == 'q':
-                    self.running = False
-                    break
-                elif key.lower() == 'w':
-                    self.velocity_x = 0.3  # forward
-                elif key.lower() == 's':
-                    self.velocity_x = -0.3  # backward
-                elif key.lower() == 'a':
-                    self.angular_z = 0.5  # turn left
-                elif key.lower() == 'd':
-                    self.angular_z = -0.5  # turn right
-                elif key.lower() == 'j':
-                    self.velocity_y = 0.2  # strafe left
-                elif key.lower() == 'l':
-                    self.velocity_y = -0.2  # strafe right
-                elif key.lower() == 'u':
-                    self.robot_state = "standing"
-                elif key.lower() == 'i':
-                    self.robot_state = "sitting"
-                elif key == ' ':  # spacebar to stop
-                    self.velocity_x = 0.0
-                    self.velocity_y = 0.0
-                    self.angular_z = 0.0
+            try:
+                key = self.get_key()
+                if key:
+                    if key.lower() == 'q' or ord(key) == 3:  # q or Ctrl+C
+                        self.running = False
+                        break
+                    elif key.lower() == 'w':
+                        self.velocity_x = 0.3  # forward
+                        print(f"\rForward: {self.velocity_x:.1f}", end="", flush=True)
+                    elif key.lower() == 's':
+                        self.velocity_x = -0.3  # backward
+                        print(f"\rBackward: {self.velocity_x:.1f}", end="", flush=True)
+                    elif key.lower() == 'a':
+                        self.angular_z = 0.5  # turn left
+                        print(f"\rTurn Left: {self.angular_z:.1f}", end="", flush=True)
+                    elif key.lower() == 'd':
+                        self.angular_z = -0.5  # turn right
+                        print(f"\rTurn Right: {self.angular_z:.1f}", end="", flush=True)
+                    elif key.lower() == 'j':
+                        self.velocity_y = 0.2  # strafe left
+                        print(f"\rStrafe Left: {self.velocity_y:.1f}", end="", flush=True)
+                    elif key.lower() == 'l':
+                        self.velocity_y = -0.2  # strafe right
+                        print(f"\rStrafe Right: {self.velocity_y:.1f}", end="", flush=True)
+                    elif key.lower() == 'u':
+                        self.robot_state = "standing"
+                        print(f"\rStanding", end="", flush=True)
+                    elif key.lower() == 'i':
+                        self.robot_state = "sitting"
+                        print(f"\rSitting", end="", flush=True)
+                    elif key == ' ':  # spacebar to stop
+                        self.velocity_x = 0.0
+                        self.velocity_y = 0.0
+                        self.angular_z = 0.0
+                        print(f"\rStopped", end="", flush=True)
+            except KeyboardInterrupt:
+                self.running = False
+                break
+            except:
+                pass
             time.sleep(0.01)
     
     def calculate_joint_positions(self, gait_phase):
@@ -142,11 +173,8 @@ class KeyboardController:
         self.print_controls()
         input()  # Wait for user to press enter
         
-        # Initialize SDK
-        if len(sys.argv) < 2:
-            ChannelFactoryInitialize(1, "lo")
-        else:
-            ChannelFactoryInitialize(0, sys.argv[1])
+        # Initialize SDK - Match simulation config
+        ChannelFactoryInitialize(1, "lo")
         
         # Create publisher
         pub = ChannelPublisher("rt/lowcmd", LowCmd_)

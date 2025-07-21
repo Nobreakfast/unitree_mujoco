@@ -1,0 +1,215 @@
+import time
+import sys
+import numpy as np
+import threading
+from queue import Queue
+
+from unitree_sdk2py.core.channel import ChannelPublisher
+from unitree_sdk2py.core.channel import ChannelFactoryInitialize
+from unitree_sdk2py.idl.default import unitree_go_msg_dds__LowCmd_
+from unitree_sdk2py.idl.unitree_go.msg.dds_ import LowCmd_
+from unitree_sdk2py.utils.crc import CRC
+
+# Joint positions for different poses
+stand_up_joint_pos = np.array([
+    0.00571868, 0.608813, -1.21763, -0.00571868, 0.608813, -1.21763,
+    0.00571868, 0.608813, -1.21763, -0.00571868, 0.608813, -1.21763
+], dtype=float)
+
+stand_down_joint_pos = np.array([
+    0.0473455, 1.22187, -2.44375, -0.0473455, 1.22187, -2.44375, 0.0473455,
+    1.22187, -2.44375, -0.0473455, 1.22187, -2.44375
+], dtype=float)
+
+# Walking gait parameters
+walk_joint_pos = np.array([
+    0.0, 0.8, -1.6, 0.0, 0.8, -1.6,
+    0.0, 0.8, -1.6, 0.0, 0.8, -1.6
+], dtype=float)
+
+class SimpleKeyboardController:
+    def __init__(self):
+        self.dt = 0.002
+        self.running_time = 0.0
+        self.crc = CRC()
+        
+        # Control states
+        self.robot_state = "standing"  # standing, walking, sitting
+        self.velocity_x = 0.0  # forward/backward
+        self.velocity_y = 0.0  # left/right
+        self.angular_z = 0.0   # turning
+        
+        self.running = True
+        self.command_queue = Queue()
+        
+    def input_thread(self):
+        """Simple input thread using standard input"""
+        print("\n=== Simple Keyboard Controller ===")
+        print("Commands:")
+        print("  w: Forward    s: Backward")
+        print("  a: Turn Left  d: Turn Right")
+        print("  j: Strafe Left  l: Strafe Right")
+        print("  u: Stand up   i: Sit down")
+        print("  space: Stop   q: Quit")
+        print("\nType commands and press Enter:")
+        print("==============================\n")
+        
+        while self.running:
+            try:
+                cmd = input("> ").strip().lower()
+                if cmd:
+                    self.command_queue.put(cmd)
+                    if cmd == 'q':
+                        self.running = False
+                        break
+            except (EOFError, KeyboardInterrupt):
+                self.running = False
+                break
+    
+    def process_commands(self):
+        """Process commands from the queue"""
+        while not self.command_queue.empty():
+            cmd = self.command_queue.get()
+            
+            if cmd == 'w':
+                self.velocity_x = 0.3
+                print(f"Forward: {self.velocity_x:.1f}")
+            elif cmd == 's':
+                self.velocity_x = -0.3
+                print(f"Backward: {self.velocity_x:.1f}")
+            elif cmd == 'a':
+                self.angular_z = 0.5
+                print(f"Turn Left: {self.angular_z:.1f}")
+            elif cmd == 'd':
+                self.angular_z = -0.5
+                print(f"Turn Right: {self.angular_z:.1f}")
+            elif cmd == 'j':
+                self.velocity_y = 0.2
+                print(f"Strafe Left: {self.velocity_y:.1f}")
+            elif cmd == 'l':
+                self.velocity_y = -0.2
+                print(f"Strafe Right: {self.velocity_y:.1f}")
+            elif cmd == 'u':
+                self.robot_state = "standing"
+                print("Standing")
+            elif cmd == 'i':
+                self.robot_state = "sitting"
+                print("Sitting")
+            elif cmd == ' ' or cmd == 'space':
+                self.velocity_x = 0.0
+                self.velocity_y = 0.0
+                self.angular_z = 0.0
+                print("Stopped")
+            elif cmd == 'q':
+                self.running = False
+    
+    def calculate_joint_positions(self, gait_phase):
+        """Calculate joint positions based on gait and velocities"""
+        if self.robot_state == "sitting":
+            return stand_down_joint_pos
+        elif self.robot_state == "standing" and abs(self.velocity_x) < 0.01 and abs(self.velocity_y) < 0.01 and abs(self.angular_z) < 0.01:
+            return stand_up_joint_pos
+        else:
+            # Simple walking gait implementation
+            joint_pos = walk_joint_pos.copy()
+            
+            # Modify joint positions based on velocities
+            if abs(self.velocity_x) > 0.01:  # Forward/backward motion
+                hip_offset = 0.2 * self.velocity_x * np.sin(gait_phase * 2 * np.pi)
+                joint_pos[0] += hip_offset  # FL hip
+                joint_pos[3] -= hip_offset  # FR hip
+                joint_pos[6] -= hip_offset  # RL hip
+                joint_pos[9] += hip_offset  # RR hip
+            
+            if abs(self.angular_z) > 0.01:  # Turning
+                turn_offset = 0.1 * self.angular_z
+                joint_pos[0] += turn_offset  # FL hip
+                joint_pos[3] += turn_offset  # FR hip
+                joint_pos[6] += turn_offset  # RL hip
+                joint_pos[9] += turn_offset  # RR hip
+            
+            if abs(self.velocity_y) > 0.01:  # Strafing
+                strafe_offset = 0.1 * self.velocity_y
+                joint_pos[0] += strafe_offset
+                joint_pos[3] -= strafe_offset
+                joint_pos[6] += strafe_offset
+                joint_pos[9] -= strafe_offset
+            
+            return joint_pos
+    
+    def run(self):
+        """Main control loop"""
+        # Initialize SDK - Match simulation config
+        ChannelFactoryInitialize(1, "lo")
+        
+        # Create publisher
+        pub = ChannelPublisher("rt/lowcmd", LowCmd_)
+        pub.Init()
+        
+        # Initialize command
+        cmd = unitree_go_msg_dds__LowCmd_()
+        cmd.head[0] = 0xFE
+        cmd.head[1] = 0xEF
+        cmd.level_flag = 0xFF
+        cmd.gpio = 0
+        
+        for i in range(20):
+            cmd.motor_cmd[i].mode = 0x01  # (PMSM) mode
+            cmd.motor_cmd[i].q = 0.0
+            cmd.motor_cmd[i].kp = 0.0
+            cmd.motor_cmd[i].dq = 0.0
+            cmd.motor_cmd[i].kd = 0.0
+            cmd.motor_cmd[i].tau = 0.0
+        
+        # Start input thread
+        input_thread = threading.Thread(target=self.input_thread)
+        input_thread.daemon = True
+        input_thread.start()
+        
+        print("Controller started! Robot will stand up automatically.")
+        
+        try:
+            while self.running:
+                step_start = time.perf_counter()
+                self.running_time += self.dt
+                
+                # Process any pending commands
+                self.process_commands()
+                
+                # Calculate gait phase for walking
+                gait_phase = (self.running_time * 2.0) % 1.0  # 2 Hz gait frequency
+                
+                # Get target joint positions
+                target_positions = self.calculate_joint_positions(gait_phase)
+                
+                # Set motor commands
+                for i in range(12):
+                    cmd.motor_cmd[i].q = target_positions[i]
+                    if self.robot_state == "sitting":
+                        cmd.motor_cmd[i].kp = 20.0
+                    elif abs(self.velocity_x) > 0.01 or abs(self.velocity_y) > 0.01 or abs(self.angular_z) > 0.01:
+                        cmd.motor_cmd[i].kp = 40.0  # Lower stiffness for walking
+                    else:
+                        cmd.motor_cmd[i].kp = 60.0  # Higher stiffness for standing
+                    
+                    cmd.motor_cmd[i].dq = 0.0
+                    cmd.motor_cmd[i].kd = 3.5
+                    cmd.motor_cmd[i].tau = 0.0
+                
+                # Send command
+                cmd.crc = self.crc.Crc(cmd)
+                pub.Write(cmd)
+                
+                # Maintain loop timing
+                time_until_next_step = self.dt - (time.perf_counter() - step_start)
+                if time_until_next_step > 0:
+                    time.sleep(time_until_next_step)
+                    
+        except KeyboardInterrupt:
+            self.running = False
+        finally:
+            print("\nController stopped.")
+
+if __name__ == '__main__':
+    controller = SimpleKeyboardController()
+    controller.run()

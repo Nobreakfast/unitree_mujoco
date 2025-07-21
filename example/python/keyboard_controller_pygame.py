@@ -210,11 +210,8 @@ class KeyboardControllerPygame:
         self.print_controls()
         input()  # Wait for user to press enter
         
-        # Initialize SDK
-        if len(sys.argv) < 2:
-            ChannelFactoryInitialize(1, "lo")
-        else:
-            ChannelFactoryInitialize(0, sys.argv[1])
+        # Initialize SDK - Match simulation config
+        ChannelFactoryInitialize(1, "lo")
         
         # Create publisher
         pub = ChannelPublisher("rt/lowcmd", LowCmd_)
@@ -269,9 +266,12 @@ class KeyboardControllerPygame:
                 cmd.crc = self.crc.Crc(cmd)
                 pub.Write(cmd)
                 
-                # Update display every few cycles
-                if int(self.running_time * 100) % 10 == 0:
+                # Update display at 30 FPS
+                if int(self.running_time * 30) % 1 == 0:
                     self.update_display()
+                
+                # Limit pygame event processing to avoid blocking
+                self.clock.tick(60)  # 60 FPS for smooth input
                 
                 # Maintain loop timing
                 time_until_next_step = self.dt - (time.perf_counter() - step_start)
